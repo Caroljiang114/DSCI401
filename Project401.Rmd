@@ -44,7 +44,7 @@ head(win,10)
 #5 visualizing the performance in last 3 years
 g <- ggplot(win, aes(x = year, y = total_wins)) +
   geom_boxplot()
-  labs(title = "Total Wins by Year, Player, and Surface",
+  labs(title = "Total Wins by Year",
        x = "Year",
        y = "Total Wins") 
 
