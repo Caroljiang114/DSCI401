@@ -1,0 +1,261 @@
+---
+title: "Project"
+author: "Chongchong Jiang"
+date: "`r Sys.Date()`"
+output: html_document
+---
+```{r,  message=FALSE,warning=FALSE}
+library(tidyverse)
+library(ggplot2)
+library(ggthemr)
+library(plotly)
+library(rvest)
+library(patchwork)
+```
+
+```{r}
+#1 read.data
+atp2023 <- read.csv("https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master/atp_matches_2023.csv")
+atp2022 <- read.csv("https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master/atp_matches_2022.csv")
+atp2021 <- read.csv("https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master/atp_matches_2021.csv")
+
+atp <- bind_rows(list(atp2021=atp2021,atp2022=atp2022,atp2023=atp2023))
+
+player <- read.csv("https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master/atp_players.csv")
+```
+
+```{r}
+#2 checking missing datapoints
+na_count <- colSums(is.na(atp))
+print(na_count)
+```
+
+```{r}
+#3 specifing year
+atp <- atp %>% mutate(year=substr(tourney_id, 1, 4))
+head(atp,10)
+```
+```{r}
+#4 listing top players who won the most matches in the last 3 years. 
+win <- atp %>% group_by(year,winner_id,winner_name) %>% summarise(total_wins = n()) %>% arrange(year,-total_wins) %>% left_join(player,by=c("winner_id"="player_id")) %>% select("winner_id","year","total_wins","name_last","winner_name")
+head(win,10)
+```
+```{r}
+#5 visualizing the performance in last 3 years
+g <- ggplot(win, aes(x = year, y = total_wins)) +
+  geom_boxplot()
+  labs(title = "Total Wins by Year, Player, and Surface",
+       x = "Year",
+       y = "Total Wins") 
+
+top_points <- win %>%
+  group_by(year) %>%
+  top_n(n = 3, wt = total_wins)
+
+g <- g + geom_text(data = top_points, aes(label = name_last), vjust = -0.8, color = "black", size = 3)
+ggthemr("fresh")
+g
+```
+
+```{r}
+#6 calculating technical indicators in serve
+serve <- atp %>%
+filter(!is.na(w_svpt)& 
+       !is.na(w_1stIn) & 
+       !is.na(w_1stWon) &  
+       !is.na(w_2ndWon)&
+       !is.na(w_ace)&
+       !is.na(w_df)&
+       !is.na(l_svpt)& 
+       !is.na(l_1stIn) & 
+       !is.na(l_1stWon) &  
+       !is.na(l_2ndWon)&
+       !is.na(l_ace)&
+       !is.na(l_df))%>%
+mutate(w_firstserveprop=w_1stIn/w_svpt,
+       w_firstwinprop=w_1stWon/w_1stIn,
+       w_secondwinprop=w_2ndWon/(w_svpt-w_1stIn-w_df),
+       w_firstprop= w_firstserveprop * w_firstwinprop,
+       w_servegameswinprop=w_SvGms/(w_SvGms+w_bpFaced-w_bpSaved),
+       w_serve_score=w_firstserveprop*100+w_firstwinprop*100+w_secondwinprop*100+w_servegameswinprop*100+w_ace-w_df) %>%
+mutate(l_firstserveprop=l_1stIn/l_svpt,
+       l_firstwinprop=l_1stWon/l_1stIn,
+       l_secondwinprop=l_2ndWon/(l_svpt-l_1stIn-l_df),
+       l_firstprop= l_firstserveprop * l_firstwinprop,
+       l_servegameswinprop=l_SvGms/(l_SvGms+l_bpFaced-l_bpSaved),
+       l_serve_score=l_firstserveprop*100+l_firstwinprop*100+l_secondwinprop*100+l_servegameswinprop*100+l_ace-l_df)
+```
+
+
+```{r}
+#7 calculating average technical indicators in serve group by winners 
+three_year_win <- serve %>% 
+  group_by(winner_id) %>% 
+  summarise(total_wins = n(),
+            avg_w_firstserveprop=mean(w_firstserveprop),
+            avg_w_firstwinprop=mean(w_firstwinprop),
+            avg_w_secondwinprop=mean(w_secondwinprop),
+            avg_w_firstprop=mean(w_firstprop),
+            avg_w_servegameswinprop=mean(w_servegameswinprop),
+            avg_w_ace=mean(w_ace),
+            avg_w_df=mean(w_df),
+            avg_w_serve_score=mean(w_serve_score)
+            )%>% 
+  left_join(player,by=c("winner_id"="player_id")) %>%       
+  select("winner_id","total_wins","name_last","avg_w_firstserveprop","avg_w_firstwinprop","avg_w_secondwinprop","avg_w_firstprop","avg_w_servegameswinprop","avg_w_ace","avg_w_df","avg_w_serve_score")  %>%
+  arrange(desc(total_wins)) %>% 
+    filter(total_wins>=10) 
+three_year_win <- three_year_win[complete.cases(three_year_win), ]
+head(three_year_win,10)
+```
+```{r}
+#8 visualizing the relationship between matches performance and serve technical indicators
+top_players <- three_year_win %>%
+  arrange(desc(total_wins)) %>%
+  head(10)
+
+g <- function(column_name,label_name,data) {
+  data %>%
+    ggplot(aes(x = !!as.name(column_name), y =total_wins )) +
+    geom_point() +
+    geom_smooth(method = "lm", se = FALSE,linetype = "dashed",color="red")+
+    geom_text(data = top_players, aes(label = name_last), vjust = -0.8, color = "black", size = 3)+
+    xlab(label_name) +
+    ylab("Total wins from 2021 to 2023")    
+}
+
+columns <- names(three_year_win)[4:length(names(three_year_win))]
+x_labels <- c("Avg 1st Serve In", "Avg 1st Serve points won", "Avg 2ed Serve points won","Avg 1st Serve In*Avg 1st Serve points won","Avg service games won","Avg ace","Avg Double Faults","Avg serve score")
+
+plots <- map2(columns, x_labels, g, data = three_year_win)
+ggthemr("fresh")
+print(plots)
+
+```
+```{r}
+#9 visualizing the relationship between firstserveprop and firstwinprop
+g <- ggplot(three_year_win, aes(x = avg_w_firstserveprop, y =  avg_w_firstwinprop)) +
+  geom_point()+geom_smooth(method = "lm", se = FALSE,linetype = "dashed",color="red")+
+  labs(x = "Avg 1st Serve In",y = "Avg 1st Serve points won") 
+ggthemr("fresh")
+g
+```
+```{r}
+#10 caculating the difference between winner and loser in serving technical indicators
+diff <- serve %>%  filter(!is.na(w_secondwinprop)&!is.na(l_secondwinprop)) %>%
+        group_by(year) %>% 
+        summarise(
+            avg_firstserveprop_diff=mean(w_firstserveprop-l_firstserveprop),
+            avg_firstwinprop_diff=mean(w_firstwinprop-l_firstwinprop),
+            avg_secondwinprop_diff=mean(w_secondwinprop-l_secondwinprop),
+            avg_firstprop_diff=mean(w_firstprop-l_firstprop),
+            avg_servegameswinprop_diff=mean(w_servegameswinprop-l_servegameswinprop),
+            avg_ace_diff=mean(w_ace-l_ace),
+            avg_df_diff=mean(w_df-l_df),
+            avg_serve_score_diff=mean(w_serve_score-l_serve_score)
+            )
+diff
+```
+```{r}
+#11 visualizing the change in difference
+p <- ggplot(diff, aes(x = year)) +
+  geom_line(aes(y = avg_firstserveprop_diff, color = "Avg 1st Serve In", group = 1)) +
+  geom_line(aes(y = avg_firstwinprop_diff, color = "Avg 1st Serve points won", group = 1)) +
+  geom_line(aes(y = avg_firstprop_diff, color = "Avg 1st Serve In*Avg 1st Serve points won", group = 1)) +
+  labs(title = "Difference Over Time",
+       x = "Year",
+       y = "Value Difference",
+       color = "Metric")+
+scale_color_discrete(name = "Serve Indicators")
+p
+```
+
+```{r}
+#12 specifying Top3 atp players in serving technical indicators in the last 3 years
+Top3 <- serve %>% select("w_firstserveprop","w_firstwinprop","w_secondwinprop","w_firstprop","w_servegameswinprop","w_ace","w_df","l_firstserveprop","l_firstwinprop","l_secondwinprop","l_firstprop","l_servegameswinprop","l_ace","l_df","winner_name","loser_name","year") %>% filter(grepl("Medvedev|Alcaraz|Djokovic", winner_name) | grepl("Medvedev|Alcaraz|Djokovic", loser_name))
+head(Top3,10)
+
+w_data <- data.frame()
+l_data <- data.frame()
+names_to_match <- c("Carlos Alcaraz", "Daniil Medvedev", "Novak Djokovic")
+
+for (name in names_to_match) {
+  if (name %in% Top3$winner_name) {
+  winner_data <- Top3 %>% filter(winner_name == name) %>% 
+                                select(year, starts_with("w_"), winner_name)
+    w_data <- rbind(w_data, winner_data)
+  }
+}
+
+for (name in names_to_match) {
+  if (name %in% Top3$loser_name) {
+    loser_data <- Top3 %>% filter(loser_name == name) %>% 
+                                select(year, starts_with("l_"), loser_name)
+    l_data <- rbind(l_data, loser_data)
+  }
+}
+new_column_names <- c("year","firstserveprop","firstwinprop","secondwinprop","firstprop","servegameswinprop","ace","df","player")
+colnames(w_data) <- new_column_names
+colnames(l_data) <- new_column_names
+Top3serve <- bind_rows(list(w_data,l_data))
+Top3serve <-Top3serve %>% group_by(player,year) %>% summarise(
+  avg_firstserveprop=mean(firstserveprop),
+  avg_firstwinprop=mean(firstwinprop),
+  avg_firstprop=mean(firstprop)) %>% 
+arrange(player,year)
+Top3serve
+```
+
+
+```{r}
+#13 comparing Top3 players in winning matches and serving performance
+Top3win <- win %>% filter(winner_name%in%names_to_match) %>% arrange(winner_name,year)
+Top3win
+
+Top3compare <- cbind(Top3serve, Top3win) %>% select(-winner_id,-year...7,-name_last,-winner_name) %>% rename(year = year...2)
+Top3compare 
+```
+
+
+```{r}
+#14 visualizing comparision in Top3 winning matches and serving performance
+p <- ggplot(Top3compare, aes(x = year)) +
+  geom_line(aes(y = avg_firstserveprop, color = "Avg 1st Serve In", group = 1)) +
+  geom_line(aes(y = avg_firstwinprop, color = "Avg 1st Serve points won", group = 1)) +
+  geom_line(aes(y = avg_firstprop, color = "Avg 1st Serve In*Avg 1st Serve points won", group = 1)) +
+  labs(title = "Top3 Performance Over Time",
+       x = "Year",
+       y = "Value",
+       color = "Metric") +
+  facet_grid(. ~ player)+
+  theme(legend.position = "bottom",legend.text = element_text(size = 7))+ 
+  guides(color = guide_legend(nrow = 3))
+p
+
+p_bar <- ggplot(Top3compare, aes(x = year, y = total_wins)) +
+  geom_bar(stat = "identity", fill = "darkblue", alpha = 0.8) +
+  labs(
+       x = "Year",
+       y = "Total Wins")+
+ facet_grid(. ~ player)
+
+p_bar
+
+
+```
+```{r}
+p <- p + theme(legend.key.width = unit(1.5, "cm")) 
+p_bar <- p_bar + theme(legend.key.width = unit(1.5, "cm"))
+
+combined_plot <- p + p_bar + plot_layout(ncol = 2, heights = c(1, 1))
+
+combined_plot
+```
+
+
+
+
+
+
+
+
